@@ -1107,7 +1107,8 @@ class Qwen3ASRThinkerForConditionalGeneration(Qwen3ASRPreTrainedModelForConditio
             self.lm_head = nn.Linear(config.text_config.hidden_size, config.classify_num, bias=False)
         else:
             self.lm_head = nn.Linear(config.text_config.hidden_size, config.text_config.vocab_size, bias=False)
-        self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
+        _pad_id = getattr(self.config, "pad_token_id", None)
+        self.pad_token_id = _pad_id if _pad_id is not None else -1
         self.rope_deltas = None
         self.post_init()
 
