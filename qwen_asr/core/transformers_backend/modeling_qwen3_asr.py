@@ -38,7 +38,18 @@ from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from transformers.processing_utils import Unpack
 from transformers.utils import auto_docstring, can_return_tuple
 from transformers.utils.deprecation import deprecate_kwarg
-from transformers.utils.generic import TransformersKwargs, check_model_inputs
+from transformers.utils.generic import TransformersKwargs, check_model_inputs as _check_model_inputs_orig
+
+# Compat: transformers v4.x uses @check_model_inputs() (factory),
+#         transformers v5.x uses @check_model_inputs (plain decorator).
+import inspect as _inspect
+_cmi_params = _inspect.signature(_check_model_inputs_orig).parameters
+if "func" in _cmi_params or not _cmi_params:
+    # v5+ style: already a plain decorator
+    check_model_inputs = _check_model_inputs_orig
+else:
+    # v4.x style: it's a factory, call it once to get the actual decorator
+    check_model_inputs = _check_model_inputs_orig()
 
 from .configuration_qwen3_asr import (
     Qwen3ASRAudioEncoderConfig,
@@ -983,7 +994,7 @@ class Qwen3ASRThinkerTextModel(Qwen3ASRPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    @check_model_inputs()
+    @check_model_inputs
     @auto_docstring
     def forward(
         self,
