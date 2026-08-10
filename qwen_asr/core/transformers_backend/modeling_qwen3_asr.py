@@ -802,9 +802,19 @@ class Qwen3ASRThinkerTextRotaryEmbedding(nn.Module):
         self.original_max_seq_len = config.max_position_embeddings
 
         self.config = config
-        self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+        if self.rope_type in ROPE_INIT_FUNCTIONS:
+            self.rope_init_fn = ROPE_INIT_FUNCTIONS[self.rope_type]
+            inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
+        else:
+            # Fallback for transformers v5+ where 'default' might not be in ROPE_INIT_FUNCTIONS
+            base = getattr(config, "rope_theta", 10000.0)
+            if hasattr(config, "head_dim"):
+                dim = config.head_dim
+            else:
+                dim = config.hidden_size // config.num_attention_heads
+            inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64).float().to(device) / dim))
+            self.attention_scaling = 1.0
 
-        inv_freq, self.attention_scaling = self.rope_init_fn(self.config, device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.original_inv_freq = self.inv_freq
 
