@@ -364,9 +364,18 @@ class Qwen3ForcedAligner:
             Qwen3ForcedAligner:
                 Initialized wrapper instance.
         """
-        AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
-        AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
-        AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
+        try:
+            AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
+        except ValueError:
+            pass
+        try:
+            AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
+        except ValueError:
+            pass
+        try:
+            AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
+        except ValueError:
+            pass
 
         model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
         if not isinstance(model, Qwen3ASRForConditionalGeneration):
