@@ -377,13 +377,9 @@ class Qwen3ForcedAligner:
         except ValueError:
             pass
 
-        model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
-        if not isinstance(model, Qwen3ASRForConditionalGeneration):
-            raise TypeError(
-                f"AutoModel returned {type(model)}, expected Qwen3ASRForConditionalGeneration."
-            )
+        model = Qwen3ASRForConditionalGeneration.from_pretrained(pretrained_model_name_or_path, **kwargs)
 
-        processor = AutoProcessor.from_pretrained(pretrained_model_name_or_path, fix_mistral_regex=True)
+        processor = Qwen3ASRProcessor.from_pretrained(pretrained_model_name_or_path, fix_mistral_regex=True)
         aligner_processor = Qwen3ForceAlignProcessor()
 
         return cls(model=model, processor=processor, aligner_processor=aligner_processor)

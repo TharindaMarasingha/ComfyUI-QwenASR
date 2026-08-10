@@ -214,9 +214,9 @@ class Qwen3ASRModel:
             Qwen3ASRModel
         """
 
-        model = AutoModel.from_pretrained(pretrained_model_name_or_path, **kwargs)
+        model = Qwen3ASRForConditionalGeneration.from_pretrained(pretrained_model_name_or_path, **kwargs)
 
-        processor = AutoProcessor.from_pretrained(pretrained_model_name_or_path, fix_mistral_regex=True)
+        processor = Qwen3ASRProcessor.from_pretrained(pretrained_model_name_or_path, fix_mistral_regex=True)
 
         forced_aligner_model = None
         if forced_aligner is not None:
