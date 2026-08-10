@@ -5,7 +5,6 @@
 # This integration script follows GPL-3.0 License.
 
 import os
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -44,257 +43,47 @@ SUPPORTED_LANGUAGES = [
 ]
 
 _ASR_MODEL_CACHE = {}
-_CONFIG_CACHE = {"mtime": None, "data": None}
 
 
-def _default_config():
-    return {
-        "models": {
-            "Qwen/Qwen3-ASR-1.7B": "Qwen3-ASR-1.7B",
-            "Qwen/Qwen3-ASR-0.6B": "Qwen3-ASR-0.6B",
-        },
-        "aligners": {
-            "None": None,
-            "Qwen/Qwen3-ForcedAligner-0.6B": "Qwen3-ForcedAligner-0.6B",
-        },
-        "sources": ["HuggingFace", "ModelScope"],
-        "defaults": {
-            "repo_id": "Qwen/Qwen3-ASR-0.6B",
-            "source": "HuggingFace",
-            "precision": "bf16",
-            "attention": "auto",
-            "language": "auto",
-            "forced_aligner": "Qwen/Qwen3-ForcedAligner-0.6B",
-        },
-    }
-
-
-def _load_config():
-    path = _CURRENT_DIR / "config.json"
+def _scan_local_models():
+    """Scan the Qwen3-ASR model folder for locally available model directories."""
+    found = []
     try:
-        mtime = path.stat().st_mtime
-    except Exception:
-        mtime = None
-
-    cache = _CONFIG_CACHE
-    if cache["data"] is not None and cache["mtime"] == mtime:
-        return cache["data"]
-
-    data = _default_config()
-    if mtime is not None:
-        try:
-            import json
-
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                data.update(loaded)
-        except Exception as e:
-            print(f"[Qwen3ASR] Failed to read config.json: {e}")
-
-    cache["mtime"] = mtime
-    cache["data"] = data
-    return data
+        for entry in os.scandir(QWEN3_ASR_ROOT):
+            if entry.is_dir() and not entry.name.startswith("."):
+                # Check it looks like a model dir (has config or model files)
+                contents = os.listdir(entry.path)
+                if contents:  # non-empty directory
+                    found.append(entry.name)
+    except Exception as e:
+        print(f"[Qwen3ASR] Failed to scan model folder: {e}")
+    found.sort()
+    return found
 
 
-def _get_model_ids():
-    models = _load_config().get("models") or {}
-    if isinstance(models, dict) and models:
-        return models
-    return _default_config()["models"]
+def _get_model_choices():
+    """Return list of ASR model folder names for the dropdown."""
+    models = [m for m in _scan_local_models() if "Aligner" not in m]
+    if not models:
+        return ["(no models found – place models in models/Qwen3-ASR/)"]
+    return models
 
 
-def _get_aligner_ids():
-    aligners = _load_config().get("aligners") or {}
-    if isinstance(aligners, dict) and aligners:
-        return aligners
-    return _default_config()["aligners"]
+def _get_aligner_choices():
+    """Return list of aligner folder names for the dropdown, with 'None' option."""
+    aligners = ["None"] + [m for m in _scan_local_models() if "Aligner" in m]
+    return aligners
 
 
-def _get_sources():
-    sources = _load_config().get("sources") or []
-    if isinstance(sources, list) and sources:
-        return sources
-    return _default_config()["sources"]
-
-
-def _get_defaults():
-    defaults = _load_config().get("defaults") or {}
-    if isinstance(defaults, dict) and defaults:
-        return defaults
-    return _default_config()["defaults"]
-_EXTRA_MODEL_PATHS = None
-
-
-def _normalize_paths(paths):
-    normalized = []
-    for p in paths:
-        if not isinstance(p, str):
-            continue
-        p = p.strip()
-        if not p:
-            continue
-        normalized.append(os.path.normpath(os.path.expanduser(p)))
-    return normalized
-
-
-def _extract_yaml_paths(data):
-    if not isinstance(data, dict):
-        return []
-
-    def split_paths(value):
-        if isinstance(value, str):
-            lines = [line.strip() for line in value.splitlines()]
-            return [line for line in lines if line]
-        if isinstance(value, list):
-            return [v for v in value if isinstance(v, str) and v.strip()]
-        return []
-
-    def is_abs(p):
-        if not p:
-            return False
-        if os.path.isabs(p):
-            return True
-        if len(p) > 1 and p[1] == ":":
-            return True
-        return False
-
-    def pull(d):
-        found = []
-        for key in ("paths", "roots", "folders", "models", "search_paths"):
-            value = d.get(key)
-            found.extend(split_paths(value))
-        return found
-
-    paths = []
-    paths.extend(pull(data))
-    for section in data.values():
-        if not isinstance(section, dict):
-            continue
-        base_path = section.get("base_path")
-        if isinstance(base_path, str) and base_path.strip():
-            paths.append(base_path)
-        for key, value in section.items():
-            if key == "base_path" or key == "is_default":
-                continue
-            for item in split_paths(value):
-                if is_abs(item) or not isinstance(base_path, str):
-                    paths.append(item)
-                else:
-                    paths.append(os.path.join(base_path, item))
-    return paths
-
-
-def _load_extra_model_paths():
-    global _EXTRA_MODEL_PATHS
-    if _EXTRA_MODEL_PATHS is not None:
-        return _EXTRA_MODEL_PATHS
-
-    candidates = []
-    try:
-        base_path = Path(getattr(folder_paths, "base_path", ""))
-        if base_path:
-            candidates.append(base_path / "extra_model_paths.yaml")
-    except Exception:
-        pass
-
-    collected = []
-    for path in candidates:
-        if not path.exists():
-            continue
-        try:
-            import yaml
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception as e:
-            print(f"[Qwen3ASR] Failed to read {path}: {e}")
-            continue
-        collected.extend(_extract_yaml_paths(data))
-
-    normalized = []
-    for p in _normalize_paths(collected):
-        if os.path.isdir(p) and p not in normalized:
-            normalized.append(p)
-
-    _EXTRA_MODEL_PATHS = tuple(normalized)
-    return _EXTRA_MODEL_PATHS
-
-
-def _find_local_model(repo_id: str) -> Optional[str]:
-    model_name = _get_model_ids().get(repo_id) or _get_aligner_ids().get(repo_id) or repo_id.split("/")[-1]
-    candidates = []
-
-    default_root = _model_storage_path(repo_id)
-    if os.path.isdir(default_root):
-        candidates.append(default_root)
-
-    try:
-        asr_roots = folder_paths.get_folder_paths("Qwen3-ASR") or []
-        for root in asr_roots:
-            candidates.append(os.path.join(root, model_name))
-    except Exception:
-        pass
-
-    for root in _load_extra_model_paths():
-        candidates.append(os.path.join(root, model_name))
-        candidates.append(os.path.join(root, "Qwen3-ASR", model_name))
-        candidates.append(os.path.join(root, "ASR", "Qwen3-ASR", model_name))
-
-    for path in candidates:
-        if os.path.isdir(path) and os.listdir(path):
-            return path
-    return None
-
-
-def _model_storage_path(repo_id: str) -> str:
-    name = _get_model_ids().get(repo_id) or _get_aligner_ids().get(repo_id) or repo_id.replace("/", "_")
-    return os.path.join(QWEN3_ASR_ROOT, name)
-
-
-def _try_copy_cached(repo_id: str, target_dir: str) -> bool:
-    if os.path.isdir(target_dir) and os.listdir(target_dir):
-        return True
-
-    hf_cache = os.path.join(Path.home(), ".cache", "huggingface", "hub")
-    hf_dir = os.path.join(hf_cache, f"models--{repo_id.replace('/', '--')}")
-    snapshots = os.path.join(hf_dir, "snapshots")
-    if os.path.isdir(snapshots):
-        entries = sorted(os.listdir(snapshots))
-        if entries:
-            source = os.path.join(snapshots, entries[-1])
-            try:
-                shutil.copytree(source, target_dir, dirs_exist_ok=True)
-                return True
-            except Exception:
-                return False
-
-    ms_cache = os.path.join(Path.home(), ".cache", "modelscope", "hub")
-    ms_dir = os.path.join(ms_cache, repo_id.replace("/", os.sep))
-    if os.path.isdir(ms_dir):
-        try:
-            shutil.copytree(ms_dir, target_dir, dirs_exist_ok=True)
-            return True
-        except Exception:
-            return False
-
-    return False
-
-
-def _download_to_local(repo_id: str, source: str, target_dir: str) -> str:
-    os.makedirs(target_dir, exist_ok=True)
-    if source == "ModelScope":
-        try:
-            from modelscope import snapshot_download
-        except Exception as e:
-            raise RuntimeError("modelscope is required for ModelScope downloads") from e
-        snapshot_download(repo_id, local_dir=target_dir)
-    else:
-        try:
-            from huggingface_hub import snapshot_download
-        except Exception as e:
-            raise RuntimeError("huggingface_hub is required for HuggingFace downloads") from e
-        snapshot_download(repo_id, local_dir=target_dir)
-
-    return target_dir
-
+def _resolve_local_model(model_name: str) -> str:
+    """Resolve a model folder name to its full path."""
+    path = os.path.join(QWEN3_ASR_ROOT, model_name)
+    if os.path.isdir(path) and os.listdir(path):
+        return path
+    raise FileNotFoundError(
+        f"Model '{model_name}' not found in {QWEN3_ASR_ROOT}. "
+        f"Please download the model and place it in that folder."
+    )
 
 def _normalize_audio(audio) -> Optional[Tuple[np.ndarray, int]]:
     if audio is None:
@@ -312,21 +101,6 @@ def _normalize_audio(audio) -> Optional[Tuple[np.ndarray, int]]:
         wave = wave.squeeze(0)
 
     return (wave.detach().cpu().numpy().astype(np.float32), int(sample_rate))
-
-
-def _resolve_model_path(repo_id: str, source: str) -> str:
-    local_path = _find_local_model(repo_id)
-    if local_path:
-        return local_path
-
-    target_dir = _model_storage_path(repo_id)
-    if os.path.isdir(target_dir) and os.listdir(target_dir):
-        return target_dir
-
-    if _try_copy_cached(repo_id, target_dir):
-        return target_dir
-
-    return _download_to_local(repo_id, source, target_dir)
 
 
 def _build_dtype(precision: str, device: torch.device) -> torch.dtype:
@@ -514,15 +288,15 @@ def _make_default_filename(ext: str) -> str:
 class AILab_Qwen3ASR:
     @classmethod
     def INPUT_TYPES(cls):
-        defaults = _get_defaults()
+        model_choices = _get_model_choices()
         return {
             "required": {
                 "audio": ("AUDIO", {"tooltip": "Audio input to transcribe."}),
             },
             "optional": {
-                "model": (list(_get_model_ids().keys()), {"default": defaults.get("repo_id", "Qwen/Qwen3-ASR-0.6B"), "tooltip": "Choose the ASR model size."}),
-                "precision": (["bf16", "fp16", "fp32"], {"default": defaults.get("precision", "bf16"), "tooltip": "Inference precision."}),
-                "language": (SUPPORTED_LANGUAGES, {"default": defaults.get("language", "auto"), "tooltip": "Force language or auto-detect."}),
+                "model": (model_choices, {"default": model_choices[0], "tooltip": "Choose a locally available ASR model from models/Qwen3-ASR/."}),
+                "precision": (["bf16", "fp16", "fp32"], {"default": "bf16", "tooltip": "Inference precision."}),
+                "language": (SUPPORTED_LANGUAGES, {"default": "auto", "tooltip": "Force language or auto-detect."}),
                 "hints": ("STRING", {"default": "", "multiline": True, "tooltip": "Optional hints/keywords (names, terms) to improve recognition."}),
                 "unload_models": ("BOOLEAN", {"default": True, "tooltip": "Unload cached model after inference."}),
             },
@@ -536,7 +310,7 @@ class AILab_Qwen3ASR:
     def transcribe(
         self,
         audio,
-        model="Qwen/Qwen3-ASR-0.6B",
+        model="Qwen3-ASR-0.6B",
         precision="bf16",
         language="auto",
         hints="",
@@ -548,8 +322,7 @@ class AILab_Qwen3ASR:
         device = model_management.get_torch_device()
         dtype = _build_dtype(precision, device)
 
-        source = _get_defaults().get("source", "HuggingFace")
-        model_path = _resolve_model_path(model, source)
+        model_path = _resolve_local_model(model)
 
         audio_data = _normalize_audio(audio)
         if audio_data is None:
@@ -582,17 +355,18 @@ class AILab_Qwen3ASR:
 class AILab_Qwen3ASRSubtitle:
     @classmethod
     def INPUT_TYPES(cls):
-        defaults = _get_defaults()
+        model_choices = _get_model_choices()
+        aligner_choices = _get_aligner_choices()
         return {
             "required": {
                 "audio": ("AUDIO", {"tooltip": "Audio input to transcribe."}),
             },
             "optional": {
-                "model": (list(_get_model_ids().keys()), {"default": defaults.get("repo_id", "Qwen/Qwen3-ASR-0.6B"), "tooltip": "Choose the ASR model size."}),
-                "precision": (["bf16", "fp16", "fp32"], {"default": defaults.get("precision", "bf16"), "tooltip": "Inference precision."}),
-                "attention": (["auto", "flash_attention_2", "sdpa", "eager"], {"default": defaults.get("attention", "auto"), "tooltip": "Attention backend override."}),
-                "forced_aligner": (list(_get_aligner_ids().keys()), {"default": defaults.get("forced_aligner", "Qwen/Qwen3-ForcedAligner-0.6B"), "tooltip": "Forced aligner for timestamped subtitles."}),
-                "language": (SUPPORTED_LANGUAGES, {"default": defaults.get("language", "auto"), "tooltip": "Force language or auto-detect."}),
+                "model": (model_choices, {"default": model_choices[0], "tooltip": "Choose a locally available ASR model from models/Qwen3-ASR/."}),
+                "precision": (["bf16", "fp16", "fp32"], {"default": "bf16", "tooltip": "Inference precision."}),
+                "attention": (["auto", "flash_attention_2", "sdpa", "eager"], {"default": "auto", "tooltip": "Attention backend override."}),
+                "forced_aligner": (aligner_choices, {"default": aligner_choices[0], "tooltip": "Forced aligner for timestamped subtitles (from models/Qwen3-ASR/)."}),
+                "language": (SUPPORTED_LANGUAGES, {"default": "auto", "tooltip": "Force language or auto-detect."}),
                 "hints": ("STRING", {"default": "", "multiline": True, "tooltip": "Optional hints/keywords (names, terms) to improve recognition."}),
                 "output_format": (["none", "txt", "srt"], {"default": "none", "tooltip": "File save format only (does not change subtitle output)."}),
                 "output_path": ("STRING", {"default": "", "multiline": False, "tooltip": "Optional output file path (relative goes to ComfyUI output)."}),
@@ -613,10 +387,10 @@ class AILab_Qwen3ASRSubtitle:
     def transcribe(
         self,
         audio,
-        model="Qwen/Qwen3-ASR-0.6B",
+        model="Qwen3-ASR-0.6B",
         precision="bf16",
         attention="auto",
-        forced_aligner="Qwen/Qwen3-ForcedAligner-0.6B",
+        forced_aligner="None",
         language="auto",
         hints="",
         output_format="none",
@@ -634,12 +408,11 @@ class AILab_Qwen3ASRSubtitle:
         device = model_management.get_torch_device()
         dtype = _build_dtype(precision, device)
 
-        source = _get_defaults().get("source", "HuggingFace")
-        model_path = _resolve_model_path(model, source)
+        model_path = _resolve_local_model(model)
 
         forced_aligner_path = ""
         if forced_aligner and forced_aligner != "None":
-            forced_aligner_path = _resolve_model_path(forced_aligner, source)
+            forced_aligner_path = _resolve_local_model(forced_aligner)
 
         audio_data = _normalize_audio(audio)
         if audio_data is None:
