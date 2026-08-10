@@ -25,9 +25,20 @@ from qwen_asr.core.transformers_backend import (
 )
 from transformers import AutoConfig, AutoModel, AutoProcessor
 
-AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
-AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
-AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
+# In transformers v5+, qwen3_asr is natively registered.
+# Only register manually for older versions that don't include it.
+try:
+    AutoConfig.register("qwen3_asr", Qwen3ASRConfig)
+except ValueError:
+    pass  # already registered natively
+try:
+    AutoModel.register(Qwen3ASRConfig, Qwen3ASRForConditionalGeneration)
+except ValueError:
+    pass
+try:
+    AutoProcessor.register(Qwen3ASRConfig, Qwen3ASRProcessor)
+except ValueError:
+    pass
 
 from .qwen3_forced_aligner import Qwen3ForcedAligner
 from .utils import (
