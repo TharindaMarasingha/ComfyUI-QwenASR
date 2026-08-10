@@ -44,6 +44,21 @@ SUPPORTED_LANGUAGES = [
 
 _ASR_MODEL_CACHE = {}
 
+# ---------------------------------------------------------------------------
+# Known HuggingFace model registry
+# Maps a friendly dropdown label → HuggingFace repo ID
+# ---------------------------------------------------------------------------
+_HF_ASR_MODELS = {
+    "Qwen3-ASR-0.6B": "Qwen/Qwen3-ASR-0.6B",
+    "Qwen3-ASR-1.7B": "Qwen/Qwen3-ASR-1.7B",
+}
+
+_HF_ALIGNER_MODELS = {
+    "Qwen3-ForcedAligner-0.6B": "Qwen/Qwen3-ForcedAligner-0.6B",
+}
+
+_ALL_HF_MODELS = {**_HF_ASR_MODELS, **_HF_ALIGNER_MODELS}
+
 
 def _is_model_dir(path: str) -> bool:
     """Check if a directory looks like it contains model files."""
@@ -56,59 +71,72 @@ def _is_model_dir(path: str) -> bool:
     return False
 
 
-_DIRECT_MODEL_LABEL = "Qwen3-ASR"
+def _ensure_model(model_name: str) -> str:
+    """Return the local path for a model, auto-downloading from HuggingFace if needed."""
+    local_path = os.path.join(QWEN3_ASR_ROOT, model_name)
+
+    # Already downloaded?
+    if os.path.isdir(local_path) and _is_model_dir(local_path):
+        return local_path
+
+    # Check the registry for a HuggingFace repo
+    repo_id = _ALL_HF_MODELS.get(model_name)
+    if not repo_id:
+        raise FileNotFoundError(
+            f"Model '{model_name}' not found locally in {QWEN3_ASR_ROOT} "
+            f"and no HuggingFace repo is registered for it."
+        )
+
+    print(f"[Qwen3ASR] Downloading {repo_id} → {local_path} ...")
+    try:
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=local_path,
+        )
+    except Exception as e:
+        raise RuntimeError(
+            f"[Qwen3ASR] Failed to download model '{repo_id}': {e}"
+        ) from e
+
+    if not _is_model_dir(local_path):
+        raise RuntimeError(
+            f"[Qwen3ASR] Downloaded '{repo_id}' but the result at "
+            f"'{local_path}' doesn't look like a valid model directory."
+        )
+
+    print(f"[Qwen3ASR] ✓ Model ready: {local_path}")
+    return local_path
 
 
 def _scan_local_models():
-    """Scan the Qwen3-ASR model folder for locally available model directories.
-
-    If model files live directly inside QWEN3_ASR_ROOT (no sub-folder per model),
-    return a special label so the dropdown still shows a usable entry.
-    """
+    """Scan for locally-downloaded model sub-directories."""
     found = []
     try:
-        # Check if the root itself IS a model directory (files placed directly)
-        if _is_model_dir(QWEN3_ASR_ROOT):
-            found.append(_DIRECT_MODEL_LABEL)
-
-        # Also scan for sub-directories (the traditional layout)
         for entry in os.scandir(QWEN3_ASR_ROOT):
             if entry.is_dir() and not entry.name.startswith("."):
                 if _is_model_dir(entry.path):
                     found.append(entry.name)
-    except Exception as e:
-        print(f"[Qwen3ASR] Failed to scan model folder: {e}")
-    found.sort()
-    return found
+    except Exception:
+        pass
+    return sorted(found)
 
 
 def _get_model_choices():
-    """Return list of ASR model folder names for the dropdown."""
-    models = [m for m in _scan_local_models() if "Aligner" not in m]
-    if not models:
-        return ["(no models found – place models in models/Qwen3-ASR/)"]
-    return models
+    """Return combined list: known HF models + any extra local models."""
+    known = list(_HF_ASR_MODELS.keys())
+    local_extra = [m for m in _scan_local_models()
+                   if m not in _ALL_HF_MODELS and "Aligner" not in m]
+    return known + local_extra if (known or local_extra) else ["(no models available)"]
 
 
 def _get_aligner_choices():
-    """Return list of aligner folder names for the dropdown, with 'None' option."""
-    aligners = ["None"] + [m for m in _scan_local_models() if "Aligner" in m]
-    return aligners
+    """Return aligner dropdown: 'None' + known aligners + any local extras."""
+    known = list(_HF_ALIGNER_MODELS.keys())
+    local_extra = [m for m in _scan_local_models()
+                   if m not in _ALL_HF_MODELS and "Aligner" in m]
+    return ["None"] + known + local_extra
 
-
-def _resolve_local_model(model_name: str) -> str:
-    """Resolve a model folder name to its full path."""
-    # If the user selected the direct-root entry, use QWEN3_ASR_ROOT itself
-    if model_name == _DIRECT_MODEL_LABEL and _is_model_dir(QWEN3_ASR_ROOT):
-        return QWEN3_ASR_ROOT
-
-    path = os.path.join(QWEN3_ASR_ROOT, model_name)
-    if os.path.isdir(path) and _is_model_dir(path):
-        return path
-    raise FileNotFoundError(
-        f"Model '{model_name}' not found in {QWEN3_ASR_ROOT}. "
-        f"Please download the model and place it in that folder."
-    )
 
 def _normalize_audio(audio) -> Optional[Tuple[np.ndarray, int]]:
     if audio is None:
@@ -319,7 +347,7 @@ class AILab_Qwen3ASR:
                 "audio": ("AUDIO", {"tooltip": "Audio input to transcribe."}),
             },
             "optional": {
-                "model": (model_choices, {"default": model_choices[0], "tooltip": "Choose a locally available ASR model from models/Qwen3-ASR/."}),
+                "model": (model_choices, {"default": model_choices[0], "tooltip": "ASR model to use. Auto-downloads from HuggingFace on first use."}),
                 "precision": (["bf16", "fp16", "fp32"], {"default": "bf16", "tooltip": "Inference precision."}),
                 "language": (SUPPORTED_LANGUAGES, {"default": "auto", "tooltip": "Force language or auto-detect."}),
                 "hints": ("STRING", {"default": "", "multiline": True, "tooltip": "Optional hints/keywords (names, terms) to improve recognition."}),
@@ -347,7 +375,7 @@ class AILab_Qwen3ASR:
         device = model_management.get_torch_device()
         dtype = _build_dtype(precision, device)
 
-        model_path = _resolve_local_model(model)
+        model_path = _ensure_model(model)
 
         audio_data = _normalize_audio(audio)
         if audio_data is None:
@@ -387,10 +415,10 @@ class AILab_Qwen3ASRSubtitle:
                 "audio": ("AUDIO", {"tooltip": "Audio input to transcribe."}),
             },
             "optional": {
-                "model": (model_choices, {"default": model_choices[0], "tooltip": "Choose a locally available ASR model from models/Qwen3-ASR/."}),
+                "model": (model_choices, {"default": model_choices[0], "tooltip": "ASR model to use. Auto-downloads from HuggingFace on first use."}),
                 "precision": (["bf16", "fp16", "fp32"], {"default": "bf16", "tooltip": "Inference precision."}),
                 "attention": (["auto", "flash_attention_2", "sdpa", "eager"], {"default": "auto", "tooltip": "Attention backend override."}),
-                "forced_aligner": (aligner_choices, {"default": aligner_choices[0], "tooltip": "Forced aligner for timestamped subtitles (from models/Qwen3-ASR/)."}),
+                "forced_aligner": (aligner_choices, {"default": aligner_choices[0], "tooltip": "Forced aligner for word-level timestamps. Auto-downloads from HuggingFace on first use."}),
                 "language": (SUPPORTED_LANGUAGES, {"default": "auto", "tooltip": "Force language or auto-detect."}),
                 "hints": ("STRING", {"default": "", "multiline": True, "tooltip": "Optional hints/keywords (names, terms) to improve recognition."}),
                 "output_format": (["none", "txt", "srt"], {"default": "none", "tooltip": "File save format only (does not change subtitle output)."}),
@@ -433,11 +461,11 @@ class AILab_Qwen3ASRSubtitle:
         device = model_management.get_torch_device()
         dtype = _build_dtype(precision, device)
 
-        model_path = _resolve_local_model(model)
+        model_path = _ensure_model(model)
 
         forced_aligner_path = ""
         if forced_aligner and forced_aligner != "None":
-            forced_aligner_path = _resolve_local_model(forced_aligner)
+            forced_aligner_path = _ensure_model(forced_aligner)
 
         audio_data = _normalize_audio(audio)
         if audio_data is None:
