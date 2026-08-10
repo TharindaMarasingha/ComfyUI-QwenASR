@@ -4,6 +4,7 @@ modelscope
 nagisa==0.2.11
 soynlp==0.0.493
 DyNet38==2.2
+librosa
 numpy
 soundfile
 torch>=2.0.0

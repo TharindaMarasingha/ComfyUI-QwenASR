@@ -25,6 +25,7 @@ try:
 except Exception as _e:
     Qwen3ASRModel = None
     _IMPORT_ERROR = _e
+    print(f"[Qwen3ASR] ⚠ Failed to import qwen_asr: {_e}")
 else:
     _IMPORT_ERROR = None
 
