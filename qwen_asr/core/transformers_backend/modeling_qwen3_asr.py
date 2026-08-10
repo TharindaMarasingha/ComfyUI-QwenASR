@@ -789,7 +789,7 @@ class Qwen3ASRAudioEncoder(Qwen3ASRPreTrainedModel):
         )
 
 
-class Qwen3ASRThinkerTextRotaryEmbedding(nn.Module):
+class Qwen3ASRThinkerTextRoPE(nn.Module):
     inv_freq: torch.Tensor  # fix linting for `register_buffer`
 
     def __init__(self, config: Qwen3ASRConfig, device=None):
@@ -998,7 +998,7 @@ class Qwen3ASRThinkerTextModel(Qwen3ASRPreTrainedModel):
             [Qwen3ASRThinkerTextDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.norm = Qwen3ASRTextRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.rotary_emb = Qwen3ASRThinkerTextRotaryEmbedding(config)
+        self.rotary_emb = Qwen3ASRThinkerTextRoPE(config)
         self.gradient_checkpointing = False
 
         # Initialize weights and apply final processing
