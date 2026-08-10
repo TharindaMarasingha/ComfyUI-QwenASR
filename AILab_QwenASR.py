@@ -45,15 +45,36 @@ SUPPORTED_LANGUAGES = [
 _ASR_MODEL_CACHE = {}
 
 
+def _is_model_dir(path: str) -> bool:
+    """Check if a directory looks like it contains model files."""
+    try:
+        for f in os.listdir(path):
+            if f == "config.json" or f.endswith((".safetensors", ".bin")):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+_DIRECT_MODEL_LABEL = "Qwen3-ASR"
+
+
 def _scan_local_models():
-    """Scan the Qwen3-ASR model folder for locally available model directories."""
+    """Scan the Qwen3-ASR model folder for locally available model directories.
+
+    If model files live directly inside QWEN3_ASR_ROOT (no sub-folder per model),
+    return a special label so the dropdown still shows a usable entry.
+    """
     found = []
     try:
+        # Check if the root itself IS a model directory (files placed directly)
+        if _is_model_dir(QWEN3_ASR_ROOT):
+            found.append(_DIRECT_MODEL_LABEL)
+
+        # Also scan for sub-directories (the traditional layout)
         for entry in os.scandir(QWEN3_ASR_ROOT):
             if entry.is_dir() and not entry.name.startswith("."):
-                # Check it looks like a model dir (has config or model files)
-                contents = os.listdir(entry.path)
-                if contents:  # non-empty directory
+                if _is_model_dir(entry.path):
                     found.append(entry.name)
     except Exception as e:
         print(f"[Qwen3ASR] Failed to scan model folder: {e}")
@@ -77,8 +98,12 @@ def _get_aligner_choices():
 
 def _resolve_local_model(model_name: str) -> str:
     """Resolve a model folder name to its full path."""
+    # If the user selected the direct-root entry, use QWEN3_ASR_ROOT itself
+    if model_name == _DIRECT_MODEL_LABEL and _is_model_dir(QWEN3_ASR_ROOT):
+        return QWEN3_ASR_ROOT
+
     path = os.path.join(QWEN3_ASR_ROOT, model_name)
-    if os.path.isdir(path) and os.listdir(path):
+    if os.path.isdir(path) and _is_model_dir(path):
         return path
     raise FileNotFoundError(
         f"Model '{model_name}' not found in {QWEN3_ASR_ROOT}. "
